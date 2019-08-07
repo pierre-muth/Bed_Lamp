@@ -28,7 +28,6 @@
 #include <stdint.h>
 #include <math.h>
 #include <pic12lf1840.h>
-#include <pic12lf1822.h>
 
 // CPU freq
 #define _XTAL_FREQ  (32000000UL)
@@ -36,7 +35,10 @@
 #define LED_data PORTAbits.RA5
 #define TEST_pin PORTAbits.RA4
 
-uint16_t voltage = 100;
+// timeout in ms (1800000UL = 30min)
+#define TIMEOUT 1800000UL
+
+uint16_t voltage = 0;
 uint32_t mili_count = 0;
 
 void interrupt isr(void) {
@@ -166,17 +168,30 @@ void resetSK6812() {
 void main(void) {
     init();
     uint8_t target_bright = 0;
+    uint8_t bright = 0;
     uint32_t last_mili = 0;
     uint8_t last_voltage = 0;
     uint8_t loop_count = 0;
+    int16_t diff = 0;
     
     while(1) {
+        // ~ 50hz loop
+        __delay_ms(20);
         
         // update analog knob value
         getVoltage();
         
         // update brightness only if significant change seen on the knob
-        if ( fabs( voltage - last_voltage) > 4 ) {
+        diff = voltage - last_voltage;
+        if ( diff > 4 || diff <= -4) {
+            mili_count = 0;
+            last_mili = 0;
+            last_voltage = voltage;
+            target_bright = voltage;
+        }
+        
+        // be sure we turn off for low values
+        if (voltage < 2 ) {
             mili_count = 0;
             last_mili = 0;
             last_voltage = voltage;
@@ -184,7 +199,7 @@ void main(void) {
         }
         
         // decrease bright slowly after timeout (30 min)
-        if ( (mili_count - last_mili) > 1800000UL ) {
+        if ( (mili_count - last_mili) > TIMEOUT ) {
             loop_count++;
             if (target_bright > 0 && loop_count > 100) {
                 target_bright--;
@@ -192,23 +207,34 @@ void main(void) {
             }
         }
         
-        // brightness curve
-        if (target_bright < 64) {
-            resetSK6812();
-            sendSK6812rgbw(target_bright *4, 0, 0, 0);
-        } else if (target_bright >= 64 && target_bright < 128) {
-            resetSK6812();
-            sendSK6812rgbw(0xFF, 0, 0, (target_bright - 64)*2);
-        } else if (target_bright >= 128 && target_bright < 192) {
-            resetSK6812();
-            sendSK6812rgbw(0xFF, 0, 0, (target_bright - 64)*2);
-        } else if (target_bright >= 192) {
-            resetSK6812();
-            sendSK6812rgbw( 0xFF, (target_bright - 192)*3, (target_bright - 192), 0xFF);
+        // change smoothly the brightness
+        diff = target_bright - bright;
+        if (diff > 0) {
+            bright++;
+        }
+        if (diff < 0) {
+            bright--;
         }
         
-        // ~ 50hz loop
-        __delay_ms(20);
+        // brightness curve
+        if (bright < 64) {
+            resetSK6812();
+            sendSK6812rgbw(bright *4, 0, 0, 0);
+            
+        } else if (bright >= 64 && bright < 128) {
+            resetSK6812();
+            sendSK6812rgbw(0xFF, 0, 0, (bright - 64)*2);
+            
+        } else if (bright >= 128 && bright < 192) {
+            resetSK6812();
+            sendSK6812rgbw(0xFF, 0, 0, (bright - 64)*2);
+            
+        } else if (bright >= 192) {
+            resetSK6812();
+            sendSK6812rgbw( 0xFF, (bright - 192)*3, (bright - 192), 0xFF);
+            
+        }
+        
     }
     
     return;
