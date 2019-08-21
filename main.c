@@ -35,8 +35,10 @@
 #define LED_data PORTAbits.RA5
 #define TEST_pin PORTAbits.RA4
 
-// timeout in ms (1800000UL = 30min)
-#define TIMEOUT 1800000UL
+// off timeout in ms (1800000UL = 30min)
+#define OFF_TIMEOUT 30000UL
+// settle timeout in ms (3000UL = 3sec)
+#define SETTLE_TIMEOUT 3000UL
 
 uint16_t voltage = 0;
 uint32_t mili_count = 0;
@@ -55,13 +57,13 @@ void init(){
     WDTCONbits.SWDTEN = 0;      // watch dog disable
 
     // pin config
-    ANSELA = 0b00000100;    // no analog on port A
+    ANSELA = 0b00000100;    // analog on port AN2
     PORTA = 0x00;
     TRISA = 0b00000100;     // input/output
     LED_data = 1;
     
     //conf ADC
-    ADCON1bits.ADFM = 0;        // left justify result
+    ADCON1bits.ADFM = 1;        // right justify result
     ADCON0bits.CHS = 0b0010;    // AN2 is ADC input
     ADCON1bits.ADPREF = 0b00;   // Positive ref is Vdd (default)
     ADCON1bits.ADCS = 0b110;    // 2us conversion
@@ -87,7 +89,7 @@ void getVoltage() {
     ADCON0bits.GO_nDONE = 1;    // Start a conversion
     while (ADCON0bits.GO_nDONE) {} ;// Wait for it to be completed
 
-    voltage = 0xFF - ADRESH;
+    voltage = (ADRESH<<8) + ADRESL;
 
 }
 
@@ -167,12 +169,10 @@ void resetSK6812() {
 
 void main(void) {
     init();
-    uint8_t target_bright = 0;
-    uint8_t bright = 0;
-    uint32_t last_mili = 0;
-    uint8_t last_voltage = 0;
+    uint16_t bright = 0;
+    uint16_t last_voltage = 0;
     uint8_t loop_count = 0;
-    int16_t diff = 0;
+    int32_t diff = 0;
     
     while(1) {
         // ~ 50hz loop
@@ -181,62 +181,45 @@ void main(void) {
         // update analog knob value
         getVoltage();
         
-        // update brightness only if significant change seen on the knob
+        // reset timeout only if significant change seen on the knob
         diff = voltage - last_voltage;
-        if ( diff > 4 || diff <= -4) {
+        if ( diff > 8 || diff <= -8) {
             mili_count = 0;
-            last_mili = 0;
             last_voltage = voltage;
-            target_bright = voltage;
-        }
-        
-        // be sure we turn off for low values
-        if (voltage < 2 ) {
-            mili_count = 0;
-            last_mili = 0;
-            last_voltage = voltage;
-            target_bright = voltage;
         }
         
         // decrease bright slowly after timeout (30 min)
-        if ( (mili_count - last_mili) > TIMEOUT ) {
+        // Or change the brightness, but settle to avoid ADC noise 
+        if ( (mili_count) > OFF_TIMEOUT ) {
             loop_count++;
-            if (target_bright > 0 && loop_count > 100) {
-                target_bright--;
+            if (bright > 0 && loop_count > 100) {
+                bright--;
                 loop_count = 0;
             }
-        }
-        
-        // change smoothly the brightness
-        diff = target_bright - bright;
-        if (diff > 0) {
-            bright++;
-        }
-        if (diff < 0) {
-            bright--;
+        } else if (mili_count < SETTLE_TIMEOUT) {
+            bright = voltage;
         }
         
         // brightness curve
-        if (bright < 64) {
+        if (bright < 256) {
             resetSK6812();
-            sendSK6812rgbw(bright *4, 0, 0, 0);
+            sendSK6812rgbw(bright, 0, 0, 0);
             
-        } else if (bright >= 64 && bright < 128) {
+        } else if (bright >= 256 && bright < 512) {
             resetSK6812();
-            sendSK6812rgbw(0xFF, 0, 0, (bright - 64)*2);
+            sendSK6812rgbw(0xFF, 0, 0, (bright - 256));
             
-        } else if (bright >= 128 && bright < 192) {
+        } else if (bright >= 512 && bright < 768) {
             resetSK6812();
-            sendSK6812rgbw(0xFF, 0, 0, (bright - 64)*2);
+            sendSK6812rgbw(0xFF, (bright - 512), (bright - 512)/2, 0xFF);
             
-        } else if (bright >= 192) {
+        } else if (bright >= 768 && bright < 1024) {
             resetSK6812();
-            sendSK6812rgbw( 0xFF, (bright - 192)*3, (bright - 192), 0xFF);
+            sendSK6812rgbw(0xFF - (bright - 768), 0xFF, 0x7F, 0xFF - (bright - 768));
             
-        }
+        } 
         
     }
     
     return;
 }
-
